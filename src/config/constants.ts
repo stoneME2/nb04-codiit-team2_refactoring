@@ -40,6 +40,9 @@ const envSchema = z.object({
   RATE_LIMIT_AUTH_REFRESH_WINDOW: z.string().default('1m'),
   RATE_LIMIT_AUTH_REFRESH_MAX: z.coerce.number().default(30),
 
+  // Load Test: AWS 네트워크 지연 시뮬레이션 (ms)
+  SIMULATE_LATENCY_MS: z.coerce.number().default(0),
+
   // Portone
   PORTONE_API_URL: z.string().default('https://api.iamport.kr'),
   PORTONE_API_KEY: z.string(),

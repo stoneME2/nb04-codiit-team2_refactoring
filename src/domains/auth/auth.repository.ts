@@ -1,4 +1,6 @@
 import prisma from '@/config/prisma.js';
+import { queryStats } from '@/common/utils/queryStats.js';
+import { env } from '@/config/constants.js';
 
 export interface CreateRefreshTokenData {
   token: string; // 해시된 토큰
@@ -49,19 +51,32 @@ export class AuthRepository {
   }
 
   async rotateRefreshToken(userId: string, data: CreateRefreshTokenData) {
-    return prisma.$transaction(async (tx) => {
-      // 1. Advisory Lock: 동일 userId의 요청 직렬화
-      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${userId}))`;
+    queryStats.recordRotation();
+    try {
+      const result = await prisma.$transaction(async (tx) => {
+        // 1. Advisory Lock: 동일 userId의 요청 직렬화
+        await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${userId}))`;
 
-      // 2. 기존 토큰 전체 삭제 (사용자당 1개 토큰만 유지)
-      await tx.refreshToken.deleteMany({
-        where: { userId },
-      });
+        // AWS 네트워크 지연 시뮬레이션 (부하테스트 전용, 기본값 0 = 비활성)
+        if (env.SIMULATE_LATENCY_MS > 0) {
+          await tx.$executeRaw`SELECT pg_sleep(${env.SIMULATE_LATENCY_MS / 1000})`;
+        }
 
-      // 3. 새 토큰 생성
-      return tx.refreshToken.create({
-        data,
+        // 2. 기존 토큰 전체 삭제 (사용자당 1개 토큰만 유지)
+        await tx.refreshToken.deleteMany({
+          where: { userId },
+        });
+
+        // 3. 새 토큰 생성
+        return tx.refreshToken.create({
+          data,
+        });
       });
-    });
+      queryStats.recordRotationSuccess();
+      return result;
+    } catch (error) {
+      queryStats.recordRotationFailure();
+      throw error;
+    }
   }
 }
