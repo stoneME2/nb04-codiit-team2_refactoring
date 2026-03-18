@@ -96,6 +96,48 @@ async function main() {
     });
   }
   console.log('✅ 테스트 계정 시딩 완료!');
+
+  // 테스트 스토어 시딩
+  const seller = await prisma.user.findUnique({ where: { email: 'seller@codiit.com' } });
+  if (!seller) throw new Error('판매자 계정이 없습니다.');
+
+  const store = await prisma.store.upsert({
+    where: { userId: seller.id },
+    update: {},
+    create: {
+      name: '테스트스토어',
+      content: '부하테스트용 스토어입니다.',
+      address: '서울시 강남구',
+      phoneNumber: '010-1234-5678',
+      userId: seller.id,
+    },
+  });
+  console.log('✅ 테스트 스토어 시딩 완료!');
+
+  // 테스트 상품 시딩
+  const topCategory = await prisma.category.findUnique({ where: { name: 'top' } });
+  const bottomCategory = await prisma.category.findUnique({ where: { name: 'bottom' } });
+  if (!topCategory || !bottomCategory) throw new Error('카테고리가 없습니다.');
+
+  const testProducts = [
+    { name: '테스트 티셔츠 A', price: 29000, image: 'https://placehold.co/300', categoryId: topCategory.id },
+    { name: '테스트 티셔츠 B', price: 35000, image: 'https://placehold.co/300', categoryId: topCategory.id },
+    { name: '테스트 바지 A', price: 45000, image: 'https://placehold.co/300', categoryId: bottomCategory.id },
+    { name: '테스트 바지 B', price: 52000, image: 'https://placehold.co/300', categoryId: bottomCategory.id },
+    { name: '테스트 티셔츠 C', price: 19000, image: 'https://placehold.co/300', categoryId: topCategory.id },
+  ];
+
+  for (const product of testProducts) {
+    const existing = await prisma.product.findFirst({
+      where: { name: product.name, storeId: store.id },
+    });
+    if (!existing) {
+      await prisma.product.create({
+        data: { ...product, storeId: store.id },
+      });
+    }
+  }
+  console.log('✅ 테스트 상품 5개 시딩 완료!');
 }
 
 main()
