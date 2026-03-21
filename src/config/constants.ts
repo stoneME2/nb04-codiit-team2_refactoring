@@ -47,6 +47,12 @@ const envSchema = z.object({
   PORTONE_API_URL: z.string().default('https://api.iamport.kr'),
   PORTONE_API_KEY: z.string(),
   PORTONE_API_SECRET: z.string(),
+
+  // Redis
+  REDIS_HOST: z.string().default('localhost'),
+  REDIS_PORT: z.coerce.number().default(6379),
+  REDIS_PASSWORD: z.string().optional(),
+  REFRESH_GRACE_PERIOD_SECONDS: z.coerce.number().default(10),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);
@@ -98,7 +104,7 @@ if (typeof rateLimitAuthRefreshWindowMs !== 'number' || rateLimitAuthRefreshWind
 // env 하나로 통합 (문자열 원본 + ms 변환값)
 export const env = {
   ...parsedEnv.data,
-  ACCESS_TOKEN_EXPIRES_MS: accessTokenExpiresMs,
+  ACCESS_TOKEN_EXPIRES_MS: accessTokenExpiresMs, //setTimeout, Redis TTL 등에 바로 사용 가능하도록 ms로 바꿈
   REFRESH_TOKEN_EXPIRES_MS: refreshTokenExpiresMs,
   RATE_LIMIT_WINDOW_MS: rateLimitWindowMs,
   RATE_LIMIT_AUTH_LOGIN_WINDOW_MS: rateLimitAuthLoginWindowMs,

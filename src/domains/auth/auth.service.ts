@@ -9,12 +9,7 @@ import { UnauthorizedError } from '@/common/utils/errors.js';
 import { loginSchema } from './auth.schema.js';
 import { UserRepository } from '@/domains/user/user.repository.js';
 import { AuthRepository } from './auth.repository.js';
-import { env } from '@/config/constants.js';
-import { logger } from '@/config/logger.js';
-import { SecurityEventType } from '@/common/types/securityEvents.type.js';
-import { measureDuration } from '@/common/utils/loggerHelpers.js';
 
-// 토큰 해싱 함수
 function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
 }
@@ -31,58 +26,20 @@ export class AuthService {
     const user = await this.userRepository.findByEmail(email);
 
     if (!user) {
-      logger.warn(
-        {
-          event: SecurityEventType.AUTHENTICATION_FAILURE,
-          email,
-          reason: 'user_not_found',
-        },
-        'Login failed - user not found',
-      );
       throw new UnauthorizedError('이메일 또는 비밀번호가 일치하지 않습니다.');
     }
 
     const isPasswordValid = await bcrypt.compare(password, user.password);
 
     if (!isPasswordValid) {
-      logger.warn(
-        {
-          event: SecurityEventType.AUTHENTICATION_FAILURE,
-          userId: user.id,
-          email: user.email,
-          reason: 'invalid_password',
-        },
-        'Login failed - invalid password',
-      );
       throw new UnauthorizedError('이메일 또는 비밀번호가 일치하지 않습니다.');
     }
 
     const accessToken = generateAccessToken(user.id, user.type);
     const refreshToken = generateRefreshToken(user.id, user.type);
-
-    // 리프레시 토큰을 해시하여 DB에 저장
     const hashedToken = hashToken(refreshToken);
-    const expiresAt = new Date(Date.now() + env.REFRESH_TOKEN_EXPIRES_MS);
 
-    // jti 추출
-    const payload = verifyRefreshToken(refreshToken);
-
-    await this.authRepository.createRefreshToken({
-      token: hashedToken,
-      jti: payload.jti!,
-      userId: user.id,
-      expiresAt,
-    });
-
-    logger.info(
-      {
-        event: SecurityEventType.AUTHENTICATION_SUCCESS,
-        userId: user.id,
-        email: user.email,
-        userType: user.type,
-      },
-      'User logged in successfully',
-    );
+    await this.authRepository.setToken(user.id, hashedToken);
 
     return {
       accessToken,
@@ -105,100 +62,84 @@ export class AuthService {
   }
 
   async refresh(refreshToken: string) {
-    // 1. DB에서 해시된 토큰 조회
-    const hashedToken = hashToken(refreshToken);
-    const storedToken = await this.authRepository.findByToken(hashedToken);
+    // 1. JWT 서명 검증 — 위조/만료 토큰은 여기서 차단, userId 추출
+    let payload: ReturnType<typeof verifyRefreshToken>;
+    try {
+      payload = verifyRefreshToken(refreshToken);
+    } catch (err) {
+      throw err;
+    }
+    const { userId } = payload;
 
-    // 2. 토큰이 없으면 에러 (무효화된 토큰)
-    if (!storedToken) {
-      logger.warn(
-        {
-          event: SecurityEventType.TOKEN_INVALID,
-          resource: 'refreshToken',
-        },
-        'Refresh token not found or invalid',
-      );
+    const requestHash = hashToken(refreshToken);
+
+    // 2. Grace Period 확인 — 동시 요청 빠른 처리 경로
+    const grace = await this.authRepository.getGraceToken(userId);
+    if (grace && grace.oldHash === requestHash) {
+      return { accessToken: grace.accessToken, refreshToken: grace.refreshToken };
+    }
+
+    // 3. 현재 유효 토큰 해시 조회
+    const storedHash = await this.authRepository.getToken(userId);
+    if (!storedHash) {
       throw new UnauthorizedError('유효하지 않은 토큰입니다.');
     }
 
-    // 3. 만료 시간 확인
-    if (storedToken.expiresAt < new Date()) {
-      await this.authRepository.deleteByToken(hashedToken);
-      logger.warn(
-        {
-          event: SecurityEventType.TOKEN_EXPIRED,
-          userId: storedToken.userId,
-        },
-        'Refresh token has expired',
-      );
-      throw new UnauthorizedError('토큰이 만료되었습니다.');
+    // 4. 해시 비교 — 불일치 시 grace 재확인 후 공격 여부 판단
+    if (storedHash !== requestHash) {
+      // Lua 원자 스크립트로 newHash + grace가 동시에 저장되므로:
+      // getToken이 newHash를 반환했다면 grace도 반드시 존재함
+      // → grace.oldHash === requestHash이면 race condition(정상), 아니면 진짜 재사용 공격
+      const raceGrace = await this.authRepository.getGraceToken(userId);
+      if (raceGrace && raceGrace.oldHash === requestHash) {
+        return { accessToken: raceGrace.accessToken, refreshToken: raceGrace.refreshToken };
+      }
+      await this.authRepository.deleteToken(userId);
+
+      throw new UnauthorizedError('유효하지 않은 토큰입니다.');
     }
 
-    // 4. JWT 검증
-    const payload = verifyRefreshToken(refreshToken);
-    const user = await this.userRepository.findById(payload.userId);
-
+    // 5. 유저 정보 조회
+    const user = await this.userRepository.findById(userId);
     if (!user) {
-      logger.warn(
-        {
-          event: SecurityEventType.RESOURCE_NOT_FOUND,
-          userId: payload.userId,
-          resource: 'user',
-        },
-        'User not found after token validation',
-      );
       throw new UnauthorizedError('사용자를 찾을 수 없습니다.');
     }
 
-    // 5. 새 액세스 토큰 + 새 리프레시 토큰 발급
+    // 6. 새 토큰 발급
     const newAccessToken = generateAccessToken(user.id, user.type);
     const newRefreshToken = generateRefreshToken(user.id, user.type);
-
-    // 6. 새 토큰의 jti 추출
-    const newPayload = verifyRefreshToken(newRefreshToken);
     const newHashedToken = hashToken(newRefreshToken);
-    const expiresAt = new Date(Date.now() + env.REFRESH_TOKEN_EXPIRES_MS);
 
-    // 7. Rotation: 기존 토큰 삭제 + 새 토큰 저장 (원자적)
-    const startTime = Date.now();
-
-    await this.authRepository.rotateRefreshToken(user.id, {
-      token: newHashedToken,
-      jti: newPayload.jti!,
-      userId: user.id,
-      expiresAt,
-    });
-
-    const durationMs = measureDuration(startTime);
-
-    logger.info(
+    // 7. Lua CAS + Grace 원자적 저장
+    //    CAS 성공 시 새 해시와 grace를 동시에 저장 → race condition 제거
+    const rotated = await this.authRepository.rotateTokenWithGrace(
+      user.id,
+      requestHash,
+      newHashedToken,
       {
-        event: SecurityEventType.TOKEN_REFRESH_SUCCESS,
-        userId: user.id,
-        durationMs,
+        oldHash: requestHash,
+        accessToken: newAccessToken,
+        refreshToken: newRefreshToken,
       },
-      `Refresh token rotated successfully in ${durationMs}ms`,
     );
 
-    // 8. 새 리프레시 토큰도 함께 반환
-    return {
-      accessToken: newAccessToken,
-      refreshToken: newRefreshToken,
-    };
+    if (!rotated) {
+      // 다른 동시 요청이 먼저 CAS 성공 → grace는 이미 원자적으로 저장됨
+      const retryGrace = await this.authRepository.getGraceToken(userId);
+      if (retryGrace && retryGrace.oldHash === requestHash) {
+        return { accessToken: retryGrace.accessToken, refreshToken: retryGrace.refreshToken };
+      }
+      throw new UnauthorizedError('유효하지 않은 토큰입니다.');
+    }
+
+    return { accessToken: newAccessToken, refreshToken: newRefreshToken };
   }
 
-  async logout(refreshToken: string, userId: string) {
-    // DB에서 해당 토큰 삭제
-    const hashedToken = hashToken(refreshToken);
-    await this.authRepository.deleteByToken(hashedToken);
-
-    logger.info(
-      {
-        event: SecurityEventType.LOGOUT_SUCCESS,
-        userId,
-      },
-      'User logged out successfully',
-    );
+  async logout(userId: string) {
+    await Promise.all([
+      this.authRepository.deleteToken(userId),
+      this.authRepository.deleteGraceToken(userId),
+    ]);
 
     return { message: '로그아웃 되었습니다.' };
   }
