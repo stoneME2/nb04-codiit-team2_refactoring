@@ -6,7 +6,7 @@ import { env } from '@/config/constants.js';
 export interface JwtPayload {
   userId: string;
   type: UserType;
-  jti?: string; // refreshToken에만 포함
+  loginAt?: number; // Unix timestamp (ms), refreshToken에만 포함 — Absolute Session 기준
 }
 
 export interface AuthUser {
@@ -22,9 +22,9 @@ export const generateAccessToken = (userId: string, type: UserType): string => {
   );
 };
 
-export const generateRefreshToken = (userId: string, type: UserType): string => {
+export const generateRefreshToken = (userId: string, type: UserType, loginAt = Date.now()): string => {
   return jwt.sign(
-    { userId, type, jti: crypto.randomUUID() }, // jti 추가로 동시 생성 시에도 고유한 토큰 보장
+    { userId, type, loginAt },
     env.REFRESH_TOKEN_SECRET as Secret,
     { expiresIn: env.REFRESH_TOKEN_EXPIRES_IN } as SignOptions,
   );

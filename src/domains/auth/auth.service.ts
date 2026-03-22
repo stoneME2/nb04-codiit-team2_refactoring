@@ -9,6 +9,7 @@ import { UnauthorizedError } from '@/common/utils/errors.js';
 import { loginSchema } from './auth.schema.js';
 import { UserRepository } from '@/domains/user/user.repository.js';
 import { AuthRepository } from './auth.repository.js';
+import { env } from '@/config/constants.js';
 
 function hashToken(token: string): string {
   return crypto.createHash('sha256').update(token).digest('hex');
@@ -63,29 +64,30 @@ export class AuthService {
 
   async refresh(refreshToken: string) {
     // 1. JWT 서명 검증 — 위조/만료 토큰은 여기서 차단, userId 추출
-    let payload: ReturnType<typeof verifyRefreshToken>;
-    try {
-      payload = verifyRefreshToken(refreshToken);
-    } catch (err) {
-      throw err;
+    const payload = verifyRefreshToken(refreshToken);
+    const { userId, loginAt } = payload;
+
+    // 2. Absolute Session 검사 — 최초 로그인 후 ABSOLUTE_SESSION_MS 초과 시 강제 만료
+    if (loginAt !== undefined && Date.now() - loginAt > env.ABSOLUTE_SESSION_MS) {
+      await this.authRepository.deleteToken(userId);
+      throw new UnauthorizedError('세션이 만료되었습니다. 다시 로그인해주세요.');
     }
-    const { userId } = payload;
 
     const requestHash = hashToken(refreshToken);
 
-    // 2. Grace Period 확인 — 동시 요청 빠른 처리 경로
+    // 4. Grace Period 확인 — 동시 요청 빠른 처리 경로
     const grace = await this.authRepository.getGraceToken(userId);
     if (grace && grace.oldHash === requestHash) {
       return { accessToken: grace.accessToken, refreshToken: grace.refreshToken };
     }
 
-    // 3. 현재 유효 토큰 해시 조회
+    // 5. 현재 유효 토큰 해시 조회
     const storedHash = await this.authRepository.getToken(userId);
     if (!storedHash) {
       throw new UnauthorizedError('유효하지 않은 토큰입니다.');
     }
 
-    // 4. 해시 비교 — 불일치 시 grace 재확인 후 공격 여부 판단
+    // 6. 해시 비교 — 불일치 시 grace 재확인 후 공격 여부 판단
     if (storedHash !== requestHash) {
       // Lua 원자 스크립트로 newHash + grace가 동시에 저장되므로:
       // getToken이 newHash를 반환했다면 grace도 반드시 존재함
@@ -99,18 +101,18 @@ export class AuthService {
       throw new UnauthorizedError('유효하지 않은 토큰입니다.');
     }
 
-    // 5. 유저 정보 조회
+    // 7. 유저 정보 조회
     const user = await this.userRepository.findById(userId);
     if (!user) {
       throw new UnauthorizedError('사용자를 찾을 수 없습니다.');
     }
 
-    // 6. 새 토큰 발급
+    // 8. 새 토큰 발급 — loginAt은 최초 로그인 시각 그대로 유지
     const newAccessToken = generateAccessToken(user.id, user.type);
-    const newRefreshToken = generateRefreshToken(user.id, user.type);
+    const newRefreshToken = generateRefreshToken(user.id, user.type, loginAt);
     const newHashedToken = hashToken(newRefreshToken);
 
-    // 7. Lua CAS + Grace 원자적 저장
+    // 9. Lua CAS + Grace 원자적 저장
     //    CAS 성공 시 새 해시와 grace를 동시에 저장 → race condition 제거
     const rotated = await this.authRepository.rotateTokenWithGrace(
       user.id,

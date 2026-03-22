@@ -16,6 +16,7 @@ const envSchema = z.object({
   ACCESS_TOKEN_EXPIRES_IN: z.string().default('15m'), // jwt.sign()에서 직접 사용
   REFRESH_TOKEN_SECRET: z.string(),
   REFRESH_TOKEN_EXPIRES_IN: z.string().default('7d'), // jwt.sign()에서 직접 사용
+  ABSOLUTE_SESSION_EXPIRES_IN: z.string().default('30d'), // 최초 로그인 후 강제 만료 기준
 
   // CORS
   CORS_ORIGIN: z.string().default('http://localhost:3001'),
@@ -66,6 +67,7 @@ if (!parsedEnv.success) {
 // ms() 변환 + 검증
 const accessTokenExpiresMs = ms(parsedEnv.data.ACCESS_TOKEN_EXPIRES_IN as StringValue);
 const refreshTokenExpiresMs = ms(parsedEnv.data.REFRESH_TOKEN_EXPIRES_IN as StringValue);
+const absoluteSessionExpiresMs = ms(parsedEnv.data.ABSOLUTE_SESSION_EXPIRES_IN as StringValue);
 const rateLimitWindowMs = ms(parsedEnv.data.RATE_LIMIT_WINDOW as StringValue);
 const rateLimitAuthLoginWindowMs = ms(parsedEnv.data.RATE_LIMIT_AUTH_LOGIN_WINDOW as StringValue);
 const rateLimitAuthRefreshWindowMs = ms(
@@ -79,6 +81,11 @@ if (typeof accessTokenExpiresMs !== 'number' || accessTokenExpiresMs <= 0) {
 
 if (typeof refreshTokenExpiresMs !== 'number' || refreshTokenExpiresMs <= 0) {
   console.error(`❌ Invalid REFRESH_TOKEN_EXPIRES_IN: ${parsedEnv.data.REFRESH_TOKEN_EXPIRES_IN}`);
+  process.exit(1);
+}
+
+if (typeof absoluteSessionExpiresMs !== 'number' || absoluteSessionExpiresMs <= 0) {
+  console.error(`❌ Invalid ABSOLUTE_SESSION_EXPIRES_IN: ${parsedEnv.data.ABSOLUTE_SESSION_EXPIRES_IN}`);
   process.exit(1);
 }
 
@@ -106,6 +113,7 @@ export const env = {
   ...parsedEnv.data,
   ACCESS_TOKEN_EXPIRES_MS: accessTokenExpiresMs, //setTimeout, Redis TTL 등에 바로 사용 가능하도록 ms로 바꿈
   REFRESH_TOKEN_EXPIRES_MS: refreshTokenExpiresMs,
+  ABSOLUTE_SESSION_MS: absoluteSessionExpiresMs,
   RATE_LIMIT_WINDOW_MS: rateLimitWindowMs,
   RATE_LIMIT_AUTH_LOGIN_WINDOW_MS: rateLimitAuthLoginWindowMs,
   RATE_LIMIT_AUTH_REFRESH_WINDOW_MS: rateLimitAuthRefreshWindowMs,

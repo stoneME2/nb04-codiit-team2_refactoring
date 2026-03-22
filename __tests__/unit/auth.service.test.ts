@@ -49,7 +49,7 @@ describe('AuthService 유닛 테스트', () => {
     mockCompare.mockResolvedValue(true);
     mockGenerateAccessToken.mockReturnValue('mock-access-token');
     mockGenerateRefreshToken.mockReturnValue(MOCK_REFRESH_TOKEN);
-    mockVerifyRefreshToken.mockReturnValue({ userId, type: 'BUYER' });
+    mockVerifyRefreshToken.mockReturnValue({ userId, type: 'BUYER', loginAt: Date.now() });
 
     // AuthRepository Redis 기본 mock — grace 미스, 정상 토큰, CAS 성공 기본값
     authRepository.getGraceToken.mockResolvedValue(null);
@@ -111,7 +111,7 @@ describe('AuthService 유닛 테스트', () => {
   describe('refresh', () => {
     it('토큰 갱신 성공 — grace 미스, CAS 성공 경로', async () => {
       const user = createUserWithGradeMock({ id: userId });
-      mockVerifyRefreshToken.mockReturnValue({ userId, type: 'BUYER' });
+      mockVerifyRefreshToken.mockReturnValue({ userId, type: 'BUYER', loginAt: Date.now() });
       userRepository.findById.mockResolvedValue(user);
 
       const result = await authService.refresh(MOCK_REFRESH_TOKEN);
@@ -129,7 +129,7 @@ describe('AuthService 유닛 테스트', () => {
     });
 
     it('토큰 갱신 성공 — grace 히트 경로 (동시 요청 처리)', async () => {
-      mockVerifyRefreshToken.mockReturnValue({ userId, type: 'BUYER' });
+      mockVerifyRefreshToken.mockReturnValue({ userId, type: 'BUYER', loginAt: Date.now() });
       authRepository.getGraceToken.mockResolvedValue({
         oldHash: MOCK_HASHED_TOKEN,
         accessToken: 'cached-access-token',
@@ -146,7 +146,7 @@ describe('AuthService 유닛 테스트', () => {
     });
 
     it('Redis에 토큰이 없으면 UnauthorizedError 발생', async () => {
-      mockVerifyRefreshToken.mockReturnValue({ userId, type: 'BUYER' });
+      mockVerifyRefreshToken.mockReturnValue({ userId, type: 'BUYER', loginAt: Date.now() });
       authRepository.getToken.mockResolvedValue(null);
 
       await expect(authService.refresh(MOCK_REFRESH_TOKEN)).rejects.toThrow(UnauthorizedError);
@@ -154,7 +154,7 @@ describe('AuthService 유닛 테스트', () => {
     });
 
     it('토큰 해시 불일치 시 UnauthorizedError 발생 (재사용 감지)', async () => {
-      mockVerifyRefreshToken.mockReturnValue({ userId, type: 'BUYER' });
+      mockVerifyRefreshToken.mockReturnValue({ userId, type: 'BUYER', loginAt: Date.now() });
       authRepository.getToken.mockResolvedValue('different-hash');
       // grace도 없음 → 진짜 재사용 공격
       authRepository.getGraceToken.mockResolvedValue(null);
@@ -164,7 +164,7 @@ describe('AuthService 유닛 테스트', () => {
     });
 
     it('해시 불일치 후 grace 재확인 성공 — 동시 요청 race condition 케이스', async () => {
-      mockVerifyRefreshToken.mockReturnValue({ userId, type: 'BUYER' });
+      mockVerifyRefreshToken.mockReturnValue({ userId, type: 'BUYER', loginAt: Date.now() });
       // getToken이 이미 rotation된 새 해시를 반환 (다른 요청이 먼저 rotation 완료)
       authRepository.getToken.mockResolvedValue('already-rotated-hash');
       // grace에는 현재 요청의 oldHash가 저장되어 있음 (Lua 원자 저장)
@@ -183,6 +183,19 @@ describe('AuthService 유닛 테스트', () => {
       expect(authRepository.deleteToken).not.toHaveBeenCalled();
     });
 
+    it('Absolute Session 만료 시 UnauthorizedError 발생', async () => {
+      const THIRTY_ONE_DAYS_MS = 31 * 24 * 60 * 60 * 1000;
+      mockVerifyRefreshToken.mockReturnValue({
+        userId,
+        type: 'BUYER',
+        loginAt: Date.now() - THIRTY_ONE_DAYS_MS, // 31일 전 로그인 (30일 기본값 초과)
+      });
+
+      await expect(authService.refresh(MOCK_REFRESH_TOKEN)).rejects.toThrow(UnauthorizedError);
+      expect(authRepository.deleteToken).toHaveBeenCalledWith(userId);
+      expect(authRepository.getGraceToken).not.toHaveBeenCalled();
+    });
+
     it('유효하지 않은 JWT 서명이면 에러 발생', async () => {
       mockVerifyRefreshToken.mockImplementation(() => {
         throw new Error('Invalid token');
@@ -193,7 +206,7 @@ describe('AuthService 유닛 테스트', () => {
     });
 
     it('사용자가 존재하지 않으면 UnauthorizedError 발생', async () => {
-      mockVerifyRefreshToken.mockReturnValue({ userId, type: 'BUYER' });
+      mockVerifyRefreshToken.mockReturnValue({ userId, type: 'BUYER', loginAt: Date.now() });
       userRepository.findById.mockResolvedValue(null);
 
       await expect(authService.refresh(MOCK_REFRESH_TOKEN)).rejects.toThrow(UnauthorizedError);
@@ -202,7 +215,7 @@ describe('AuthService 유닛 테스트', () => {
 
     it('CAS 실패 후 grace 재확인 성공 — 동시 요청 경합 패배 케이스', async () => {
       const user = createUserWithGradeMock({ id: userId });
-      mockVerifyRefreshToken.mockReturnValue({ userId, type: 'BUYER' });
+      mockVerifyRefreshToken.mockReturnValue({ userId, type: 'BUYER', loginAt: Date.now() });
       userRepository.findById.mockResolvedValue(user);
       // CAS 실패 (다른 요청이 먼저 성공 — grace는 이미 원자적으로 저장됨)
       authRepository.rotateTokenWithGrace.mockResolvedValue(false);
