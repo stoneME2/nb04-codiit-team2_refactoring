@@ -16,6 +16,7 @@ const envSchema = z.object({
   ACCESS_TOKEN_EXPIRES_IN: z.string().default('15m'), // jwt.sign()에서 직접 사용
   REFRESH_TOKEN_SECRET: z.string(),
   REFRESH_TOKEN_EXPIRES_IN: z.string().default('7d'), // jwt.sign()에서 직접 사용
+  ABSOLUTE_SESSION_EXPIRES_IN: z.string().default('30d'), // 최초 로그인 후 강제 만료 기준
 
   // CORS
   CORS_ORIGIN: z.string().default('http://localhost:3001'),
@@ -47,6 +48,12 @@ const envSchema = z.object({
   PORTONE_API_URL: z.string().default('https://api.iamport.kr'),
   PORTONE_API_KEY: z.string(),
   PORTONE_API_SECRET: z.string(),
+
+  // Redis
+  REDIS_HOST: z.string().default('localhost'),
+  REDIS_PORT: z.coerce.number().default(6379),
+  REDIS_PASSWORD: z.string().optional(),
+  REFRESH_GRACE_PERIOD_SECONDS: z.coerce.number().default(10),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);
@@ -60,6 +67,7 @@ if (!parsedEnv.success) {
 // ms() 변환 + 검증
 const accessTokenExpiresMs = ms(parsedEnv.data.ACCESS_TOKEN_EXPIRES_IN as StringValue);
 const refreshTokenExpiresMs = ms(parsedEnv.data.REFRESH_TOKEN_EXPIRES_IN as StringValue);
+const absoluteSessionExpiresMs = ms(parsedEnv.data.ABSOLUTE_SESSION_EXPIRES_IN as StringValue);
 const rateLimitWindowMs = ms(parsedEnv.data.RATE_LIMIT_WINDOW as StringValue);
 const rateLimitAuthLoginWindowMs = ms(parsedEnv.data.RATE_LIMIT_AUTH_LOGIN_WINDOW as StringValue);
 const rateLimitAuthRefreshWindowMs = ms(
@@ -73,6 +81,11 @@ if (typeof accessTokenExpiresMs !== 'number' || accessTokenExpiresMs <= 0) {
 
 if (typeof refreshTokenExpiresMs !== 'number' || refreshTokenExpiresMs <= 0) {
   console.error(`❌ Invalid REFRESH_TOKEN_EXPIRES_IN: ${parsedEnv.data.REFRESH_TOKEN_EXPIRES_IN}`);
+  process.exit(1);
+}
+
+if (typeof absoluteSessionExpiresMs !== 'number' || absoluteSessionExpiresMs <= 0) {
+  console.error(`❌ Invalid ABSOLUTE_SESSION_EXPIRES_IN: ${parsedEnv.data.ABSOLUTE_SESSION_EXPIRES_IN}`);
   process.exit(1);
 }
 
@@ -98,8 +111,9 @@ if (typeof rateLimitAuthRefreshWindowMs !== 'number' || rateLimitAuthRefreshWind
 // env 하나로 통합 (문자열 원본 + ms 변환값)
 export const env = {
   ...parsedEnv.data,
-  ACCESS_TOKEN_EXPIRES_MS: accessTokenExpiresMs,
+  ACCESS_TOKEN_EXPIRES_MS: accessTokenExpiresMs, //setTimeout, Redis TTL 등에 바로 사용 가능하도록 ms로 바꿈
   REFRESH_TOKEN_EXPIRES_MS: refreshTokenExpiresMs,
+  ABSOLUTE_SESSION_MS: absoluteSessionExpiresMs,
   RATE_LIMIT_WINDOW_MS: rateLimitWindowMs,
   RATE_LIMIT_AUTH_LOGIN_WINDOW_MS: rateLimitAuthLoginWindowMs,
   RATE_LIMIT_AUTH_REFRESH_WINDOW_MS: rateLimitAuthRefreshWindowMs,

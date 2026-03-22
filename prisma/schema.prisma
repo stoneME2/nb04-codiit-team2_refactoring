@@ -105,23 +105,8 @@ model User {
   storeLikes    StoreLike[]
   notifications Notification[]
   pointHistory  PointHistory[]
-  refreshTokens RefreshToken[]
 
   @@map("users")
-}
-
-model RefreshToken {
-  id        String   @id @default(cuid())
-  token     String   @unique
-  jti       String   @unique
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-
-  @@index([userId])
-  @@index([jti])
-  @@map("refresh_tokens")
 }
 
 model Grade {

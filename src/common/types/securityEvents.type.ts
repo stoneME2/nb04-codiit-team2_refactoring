@@ -135,4 +135,31 @@ export enum SecurityEventType {
    * Triggered when: IP exceeds refresh token request limit
    */
   RATE_LIMIT_REFRESH_EXCEEDED = 'RATE_LIMIT_REFRESH_EXCEEDED',
+
+  // --- Refresh 세분화 이벤트 ---
+
+  /**
+   * Refresh cookie missing — 쿠키가 요청에 없음
+   */
+  TOKEN_REFRESH_COOKIE_MISSING = 'TOKEN_REFRESH_COOKIE_MISSING',
+
+  /**
+   * Refresh token JWT expired — JWT exp 초과
+   */
+  TOKEN_REFRESH_JWT_EXPIRED = 'TOKEN_REFRESH_JWT_EXPIRED',
+
+  /**
+   * Refresh token not found in Redis — Redis에 해시 없음 (로그아웃/만료)
+   */
+  TOKEN_REFRESH_REDIS_MISS = 'TOKEN_REFRESH_REDIS_MISS',
+
+  /**
+   * CAS rotation succeeded — 새 토큰 발급 및 Redis 교체 완료
+   */
+  TOKEN_REFRESH_ROTATED = 'TOKEN_REFRESH_ROTATED',
+
+  /**
+   * Grace period hit — 동시 요청이 캐시된 새 토큰 반환
+   */
+  TOKEN_REFRESH_GRACE_HIT = 'TOKEN_REFRESH_GRACE_HIT',
 }

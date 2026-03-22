@@ -3,6 +3,7 @@ import { app } from '@/app.js';
 import { env } from '@/config/constants.js';
 import { logger } from '@/config/logger.js';
 import prisma from '@/config/prisma.js';
+import redis from '@/config/redis.js';
 import { sseManager } from '@/common/utils/sse.manager.js';
 import { orderService } from '@/domains/order/order.container.js';
 
@@ -55,6 +56,9 @@ const gracefulShutdown = async (signal: string, timeout: number = 30000) => {
       // Prisma 커넥션 종료
       await prisma.$disconnect();
       logger.info('✅ Database connections closed');
+
+      await redis.quit();
+      logger.info('✅ Redis connection closed');
 
       logger.info('🎉 Graceful shutdown completed');
       process.exit(0);
